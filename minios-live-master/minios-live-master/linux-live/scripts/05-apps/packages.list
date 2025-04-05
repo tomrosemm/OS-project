@@ -1,0 +1,54 @@
+vlc +pv=toolbox
+vlc-plugin-bittorrent +pv=toolbox +pv=ultra
+vlc-plugin-samba +pv=toolbox +pv=ultra
+vlc-l10n -lo=en_US +pv=toolbox
+vlc-l10n +ml=true +pv=toolbox
+vlc-l10n +kl=true +pv=toolbox
+gparted +pv=toolbox
+gsmartcontrol +pv=toolbox
+baobab +pv=toolbox
+hardinfo +pv=toolbox
+galculator +pv=toolbox
+virt-manager +pv=toolbox
+gir1.2-spiceclientgtk-3.0 +pv=toolbox
+doublecmd-gtk +pv=toolbox
+pdfarranger +pv=toolbox +pv=ultra
+gnome-nettool +pv=toolbox
+onboard +pv=toolbox +pv=ultra
+grsync +pv=toolbox
+rescuezilla +pv=toolbox
+kdiskmark +pv=toolbox
+qdiskinfo +pv=toolbox
+bleachbit +pv=toolbox
+wireshark +pv=toolbox
+remmina +pv=toolbox
+remmina-plugin-rdp +pv=toolbox
+remmina-plugin-vnc +pv=toolbox
+gtkhash +pv=toolbox
+czkawka +pv=toolbox
+zulucrypt-gui +pv=toolbox
+zulumount-gui +pv=toolbox
+keepassxc +pv=toolbox
+guymager +pv=toolbox
+isomaster +pv=toolbox
+qphotorec -dp=legacy +pv=toolbox
+zenmap +pv=toolbox
+x11vnc +pv=toolbox
+veracrypt -dp=legacy +pv=toolbox
+wxhexeditor +pv=toolbox
+uget +pv=toolbox
+synaptic +pv=toolbox +pv=ultra
+eddy-handler +pv=toolbox +pv=ultra
+mintstick +pv=toolbox
+android-file-transfer +pv=toolbox
+gimp +pv=toolbox +pv=ultra
+obs-studio +pv=toolbox +pv=ultra
+obs-plugins +pv=toolbox +pv=ultra
+inkscape +pv=toolbox +pv=ultra
+blender +pv=toolbox +pv=ultra
+audacity +pv=toolbox +pv=ultra
+rawtherapee +pv=toolbox +pv=ultra
+fonts-open-sans +pv=toolbox +pv=ultra
+libreoffice +pv=toolbox +pv=ultra
+libreoffice-gtk3 +pv=toolbox +pv=ultra
+libreoffice-style-elementary +pv=ultra

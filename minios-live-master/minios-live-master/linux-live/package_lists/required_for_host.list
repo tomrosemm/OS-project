@@ -1,0 +1,11 @@
+# Applications required by the host system to build.
+sudo
+binutils
+debootstrap
+squashfs-tools
+xz-utils
+lz4
+zstd
+xorriso
+mtools
+rsync

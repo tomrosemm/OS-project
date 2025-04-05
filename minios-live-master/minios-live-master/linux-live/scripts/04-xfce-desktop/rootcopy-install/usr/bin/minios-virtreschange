@@ -1,0 +1,55 @@
+#!/bin/bash
+
+LOGDIR="$HOME/.log"
+LOGFILE="$LOGDIR/minios-virtreschange.log"
+
+mkdir -p $LOGDIR
+
+# Function to log messages with date and time
+log_message() {
+    local MESSAGE="$1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $MESSAGE" >>$LOGFILE
+    echo "$MESSAGE"
+}
+
+# Function to check if running in a virtual environment
+is_virtual() {
+    grep -qEi "(VirtualBox|VMware|KVM|QEMU|Xen|microsoft corporation|Bochs)" /sys/class/dmi/id/product_name 2>/dev/null || grep -qEi "(Oracle|microsoft corporation|Bochs)" /sys/class/dmi/id/sys_vendor 2>/dev/null
+}
+
+# Function to check if guest utilities are installed and running
+guest_utils_active() {
+    pgrep -f 'vboxadd|vmtoolsd|qemu-ga|hv_utils' >/dev/null 2>&1 || [[ -d /proc/xen ]]
+}
+
+# Function to extract resolution from kernel parameters
+get_resolution() {
+    local RESOLUTION=$(grep -oE 'virtres=[0-9]+x[0-9]+' /proc/cmdline | cut -d= -f2)
+    echo "${RESOLUTION:-}" # Return empty string if not found
+}
+
+# Get desired resolution from kernel parameters, defaulting to 1280x800
+DESIRED_RESOLUTION=$(get_resolution)
+if [[ -z "$DESIRED_RESOLUTION" ]]; then
+    DESIRED_RESOLUTION="1280x800"
+    log_message "No virtual resolution specified, using default resolution: $DESIRED_RESOLUTION"
+fi
+
+# Check if the novirtres parameter is set
+if grep -q 'novirtres' /proc/cmdline; then
+    log_message "Changing the virtual resolution is disabled by a kernel parameter."
+else
+    # Check if running in a virtual environment and if guest utilities are active
+    if is_virtual; then
+        if guest_utils_active; then
+            log_message "Guest utilities are active. No changes made to screen size."
+        else
+            # Switch to the desired screen size
+            OUTPUT=$(xrandr 2>/dev/null | grep -iv disconnected | grep -i 'connected' | head -n 1 | cut -d " " -f 1)
+            xrandr --output "$OUTPUT" --mode "$DESIRED_RESOLUTION" -s "$DESIRED_RESOLUTION"
+            log_message "Running in a virtual environment without guest utilities. Screen size set to $DESIRED_RESOLUTION."
+        fi
+    else
+        log_message "Not running in a virtual environment. No changes made to screen size."
+    fi
+fi

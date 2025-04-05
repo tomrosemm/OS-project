@@ -1,0 +1,354 @@
+#!/bin/bash
+
+set -e          # exit on error
+set -o pipefail # exit on pipeline error
+set -u          # treat unset variable as error
+
+. "/minioslib"
+. "/minios-build.conf"
+
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+IFS="/"
+TIMEZONE=(${TIMEZONE})
+
+console_colors
+
+if [ -d "/usr/lib/systemd/system" ]; then
+    SYSTEMD_PATH="/usr/lib/systemd"
+elif [ -d "/lib/systemd/system" ]; then
+    SYSTEMD_PATH="/lib/systemd"
+fi
+
+if [ "${LOCALE}" != "C" ] && [ "${LOCALE}" != "en_US" ]; then
+    DEBCONF_SETTINGS=(
+        "keyboard-configuration  keyboard-configuration/layoutcode       string  us,${LAYOUTID}"
+        "keyboard-configuration  keyboard-configuration/variant  select  ${LAYOUTDSC}"
+        "keyboard-configuration  keyboard-configuration/toggle   select  Alt+Shift"
+        "tzdata  tzdata/Zones/${TIMEZONE[0]}     select  ${TIMEZONE[1]}"
+        "locales locales/locales_to_be_generated multiselect     ${LOCALE}.UTF-8 UTF-8"
+    )
+else
+    DEBCONF_SETTINGS=(
+        "locales locales/locales_to_be_generated multiselect     ${LOCALE}.UTF-8 UTF-8"
+    )
+fi
+
+DEBCONF_SETTINGS+=(
+    "locales locales/default_environment_locale      select  ${LOCALE}.UTF-8"
+    "davfs2 davfs2/suid_file boolean true"
+    "console-setup   console-setup/codeset47 select  Guess optimal character set"
+    "console-setup   console-setup/charmap47 select  UTF-8"
+    "console-setup   console-setup/fontsize-fb47 select  8x16"
+    "console-setup   console-setup/fontface47select  Fixed"
+    "console-setup   console-setup/fontsize-text47   select  8x16"
+    "openssh-server  openssh-server/password-authentication  boolean true"
+    "openssh-server  openssh-server/permit-root-login        boolean false"
+)
+
+DEBCONF_SETTINGS+=(
+    "keyboard-configuration  keyboard-configuration/layout   select  ${LAYOUTDSC}"
+)
+
+if [ "${MULTILINGUAL}" = "true" ]; then
+    LOCALES_STRING=""
+    for ITEM in "${!LOCALES[@]}"; do
+        LOCALES_STRING+="${ITEM}.UTF-8 UTF-8, "
+    done
+    LOCALES_STRING=${LOCALES_STRING%??}
+    DEBCONF_SETTINGS+=(
+        "locales locales/locales_to_be_generated multiselect ${LOCALES_STRING}"
+    )
+fi
+
+(
+    for SETTING in "${DEBCONF_SETTINGS[@]}"; do
+        echo "${SETTING}" | debconf-set-selections -v >/dev/null 2>&1
+    done
+) &
+DEBCONF_PID="$!"
+spinner "${DEBCONF_PID}" "Applying debconf settings"
+wait "${DEBCONF_PID}"
+
+if [ ! -f /etc/apt/apt.conf.d/000MiniOS ]; then
+    cat <<'EOF' >/etc/apt/apt.conf.d/000MiniOS
+APT::Install-Recommends "0";
+APT::Install-Suggests "0";
+Acquire::Languages { "none"; }
+EOF
+fi
+
+>/etc/apt/sources.list.d/minios-linux.list
+if [ "${DISTRIBUTION}" = "bookworm" ] || [ "${DISTRIBUTION}" = "sid" ] || [ "${DISTRIBUTION}" = "jammy" ] || [ "${DISTRIBUTION}" = "noble" ] || [ "${DISTRIBUTION}" = "bionic" ]; then
+    echo "deb https://minios.dev/debian/ ${DISTRIBUTION} main contrib non-free" >/etc/apt/sources.list.d/minios-linux.list
+    echo "#deb-src https://minios.dev/debian/ ${DISTRIBUTION} main contrib non-free" >>/etc/apt/sources.list.d/minios-linux.list
+fi
+echo "deb https://minios.dev/debian/ generic main contrib non-free" >>/etc/apt/sources.list.d/minios-linux.list
+echo "#deb-src https://minios.dev/debian/ generic main contrib non-free" >>/etc/apt/sources.list.d/minios-linux.list
+cat <<EOF >/etc/apt/preferences.d/minios-linux
+Package: *
+Pin: release l=MiniOS Repository
+Pin-Priority: 1001
+EOF
+
+if [ "$PACKAGE_VARIANT" = "minimum" ]; then
+    cat <<EOF >/etc/dpkg/dpkg.cfg.d/exclusions
+path-exclude=/usr/share/man/*
+path-include=/usr/share/man/man[0-9]/*
+path-include=/usr/share/man/en/*
+path-exclude=/usr/share/doc/*
+path-include=/usr/share/doc/*/copyright
+path-exclude=/usr/share/info/*
+path-exclude=/usr/share/help/*
+path-exclude=/usr/share/gnome/help/*
+path-exclude=/usr/lib/x86_64-linux-gnu/dri/d3d12_dri.so
+path-exclude=/usr/share/icons/*/192x192/*
+path-exclude=/usr/share/icons/*/256x256/*
+path-exclude=/usr/share/icons/*/480x480/*
+path-exclude=/usr/share/icons/*/512x512/*
+EOF
+fi
+
+if [ "$LOCALE" = "C" ]; then
+    cat <<EOF >/etc/dpkg/dpkg.cfg.d/locale-exclusions
+path-exclude=/usr/share/locale/*
+path-include=/usr/share/locale/locale.alias
+EOF
+fi
+
+APT_PID=""
+
+DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 &
+APT_PID="$!"
+spinner "${APT_PID}" "Updating package lists"
+wait "${APT_PID}"
+
+DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq >/dev/null 2>&1 &
+APT_PID="$!"
+spinner "${APT_PID}" "Upgrading installed packages"
+wait "${APT_PID}"
+
+chmod +x /linux-live/install-packages
+/linux-live/install-packages -l "${SCRIPT_DIR}/packages.list" -c "/minios-build.conf"
+
+if [ "${DISTRIBUTION_TYPE}" = "ubuntu" ]; then
+    apt-get -y autoremove linux-modules-extra-* linux-firmware
+fi
+
+if dpkg -l | grep -q dnsmasq; then
+    if [ "${DESKTOP_ENVIRONMENT}" = "flux" ] || [ "${PACKAGE_VARIANT}" = "minimum" ] || [ "${DISTRIBUTION}" = "noble" ]; then
+        systemctl disable dnsmasq
+    fi
+fi
+
+if [ -f /bin/ping ]; then
+    chmod +s /bin/ping
+fi
+
+if dpkg -l | grep -q docker; then
+    systemctl disable docker.socket >/dev/null 2>&1
+    systemctl disable docker.service >/dev/null 2>&1
+    systemctl disable containerd.service >/dev/null 2>&1
+fi
+if dpkg -l | grep -q libvirt; then
+    systemctl disable libvirtd >/dev/null 2>&1
+fi
+if dpkg -l | grep -q open-iscsi; then
+    systemctl disable iscsid >/dev/null 2>&1
+fi
+if dpkg -l | grep -q nfs-common; then
+    systemctl disable rpcbind >/dev/null 2>&1
+fi
+
+if [ -f /etc/systemd/system/multi-user.target.wants/grub-initrd-fallback.service ]; then
+    systemctl disable grub-initrd-fallback.service >/dev/null 2>&1
+fi
+
+if dpkg -l | grep -q ssh; then
+    systemctl disable ssh >/dev/null 2>&1
+fi
+
+# configuration
+
+(cd /$BUILD_SCRIPTS/scripts/00-core/rootcopy-install && cp --parents -afr * /)
+
+# minios-install setup
+if [ ! -d /usr/lib/usev/rules.d ]; then
+    mkdir -p /usr/lib/udev/rules.d
+fi
+cat <<EOF >/usr/lib/udev/rules.d/90-minios-automount.rules
+# we don't care about loop* and ram* devices
+KERNEL=="[!lr]*", SUBSYSTEM=="block", RUN+="/usr/sbin/minios-automount %r/%k"
+
+EOF
+if [ -d /etc/NetworkManager ] && [[ "${DISTRIBUTION}" = "jammy" || "${DISTRIBUTION}" = "noble" || "${DISTRIBUTION_TYPE}" = "ubuntu" ]]; then
+    if [ ! -d /etc/netplan/ ]; then
+        mkdir -p /etc/netplan/
+    fi
+    cat <<EOF >/etc/netplan/01-netcfg.yaml
+# This file describes the network interfaces available on your system
+# For more information, see netplan(5).
+# Set and change netplan renderer to NetworkManager GUI tool
+network:
+  version: 2
+  renderer: NetworkManager
+
+EOF
+    cat <<EOF >/etc/NetworkManager/NetworkManager.conf
+[main]
+rc-manager=resolvconf
+plugins=ifupdown,keyfile
+dns=dnsmasq
+[ifupdown]
+managed=false
+
+EOF
+fi
+
+if [ ! -f /usr/share/sudo ]; then
+    cat <<EOF >/usr/share/sudo
+#!/bin/bash
+if [ "\$#" -lt 1 ]; then
+   echo "Usage: sudo [command] [arguments]"
+   exit 1
+fi
+
+if [ "\$UID" = 0 ]; then
+   exec "\$@"
+fi
+
+echo "Sudo is not installed. Run the command as root or install sudo."
+EOF
+fi
+
+# configure locales
+if [ -f /etc/locale.gen ] && [ "$LOCALE" != "C" ]; then
+    sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+fi
+
+if [ "${DISTRIBUTION_TYPE}" = "ubuntu" ]; then
+    cat >/etc/default/keyboard <<'EOF'
+# KEYBOARD CONFIGURATION FILE
+
+# Consult the keyboard(5) manual page.
+
+XKBMODEL="pc105"
+XKBLAYOUT="us"
+XKBVARIANT=""
+XKBOPTIONS=""
+
+BACKSPACE="guess"
+EOF
+    dpkg-reconfigure -f noninteractive keyboard-configuration
+fi
+
+if dpkg -l | grep -q console-setup; then
+    cat >/etc/default/console-setup <<'EOF'
+# CONFIGURATION FILE FOR SETUPCON
+
+# Consult the console-setup(5) manual page.
+
+ACTIVE_CONSOLES="/dev/tty[1-6]"
+
+CHARMAP="UTF-8"
+
+CODESET="guess"
+FONTFACE="Fixed"
+FONTSIZE="8x16"
+
+VIDEOMODE=
+
+# The following is an example how to use a braille font
+# FONT='lat9w-08.psf.gz brl-8x8.psf'
+EOF
+    dpkg-reconfigure -f noninteractive console-setup
+fi
+
+if dpkg -l | grep -q firewalld; then
+    systemctl disable firewalld >/dev/null 2>&1
+else
+    rm -rf /etc/firewalld
+fi
+if dpkg -l | grep -q cockpit; then
+    systemctl disable cockpit.socket >/dev/null 2>&1
+fi
+
+if dpkg -l | grep -q laptop-mode-tools; then
+    if [ -f /usr/share/applications/laptop-mode-tools.desktop ]; then
+        rm /usr/share/applications/laptop-mode-tools.desktop
+    fi
+fi
+
+if ! grep -q LANG /etc/default/locale; then
+    echo "LANG=\"${LOCALE}.UTF-8\"" >>/etc/default/locale
+fi
+
+dpkg-reconfigure -f noninteractive locales >/dev/null 2>&1
+
+echo root:"${ROOT_PASSWORD}" | chpasswd
+cp -f /etc/skel/.bashrc /root/
+
+mkdir -p "/usr/share/minios" "/etc/minios"
+
+sed -i 's/^#EXTRA_GROUPS=.*/EXTRA_GROUPS="adm cdrom sudo dip plugdev users lpadmin sambashare audio docker libvirt wireshark"/' /etc/adduser.conf
+sed -i 's/^#ADD_EXTRA_GROUPS=.*/ADD_EXTRA_GROUPS=1/' /etc/adduser.conf
+
+if [ -d /etc/NetworkManager ]; then
+    if [ ! -d /etc/NetworkManager/dispatcher.d ]; then
+        mkdir -p /etc/NetworkManager/dispatcher.d
+    fi
+fi
+if [ -d /etc/NetworkManager/dispatcher.d ]; then
+    cat <<'EOF' >/etc/NetworkManager/dispatcher.d/09-timedate
+#!/bin/sh
+case "$2" in
+    up)
+        sleep 3
+        # Check the availability of https://ipapi.co/timezone over a minute at intervals
+        for i in {1..60}
+        do
+            if curl --output /dev/null --silent --head --fail https://ipapi.co/timezone
+            then
+                timedatectl set-local-rtc 0
+                timedatectl set-ntp true
+                timedatectl set-timezone "$(curl --fail https://ipapi.co/timezone)"
+                break
+            else
+                echo "https://ipapi.co/timezone is not available. Attempt number $i..."
+                sleep 1
+            fi
+        done
+    ;;
+esac
+EOF
+    rm /etc/NetworkManager/dispatcher.d/09-timedate
+    #chmod +x /etc/NetworkManager/dispatcher.d/09-timedate
+fi
+
+DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq vim* grub* debconf-i18n installation-report >/dev/null 2>&1 &
+PURGE_PID="$!"
+spinner "${PURGE_PID}" "Purging packages"
+wait "${PURGE_PID}"
+
+if [ "${LOCALE}" != "en_US" ]; then
+    if ! grep -q LANG /etc/default/locale; then
+        cat <<EOF >/etc/default/locale
+#  File generated by update-locale
+LANG="${LOCALE}.UTF-8"
+
+EOF
+    fi
+fi
+
+if [ -f /etc/resolv.conf ]; then
+    if [ ! -L /etc/resolv.conf ]; then
+        cat <<EOF >/etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+
+EOF
+    fi
+fi
+
+for APP in htop mc mcedit; do
+    rm -f /usr/share/applications/$APP.desktop
+done
